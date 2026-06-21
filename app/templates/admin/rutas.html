@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+{% block titulo %}Rutas y Paradas — SIG Transporte{% endblock %}
+
+{% block head_extra %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+{% endblock %}
+
+{% block contenido %}
+<div class="topbar">
+  <h2><i class="bi bi-signpost-split-fill"></i> Rutas y Paradas</h2>
+  <button class="btn-sig" onclick="abrirModalRuta()"><i class="bi bi-plus-lg"></i> Nueva ruta</button>
+</div>
+
+<div class="panel">
+  <table class="tabla-sig">
+    <thead>
+      <tr><th>Código</th><th>Nombre</th><th>Paradas</th><th>Estado</th><th>Acciones</th></tr>
+    </thead>
+    <tbody id="tabla-rutas">
+      <tr><td colspan="5" style="text-align:center; color:#95a5a6;">Cargando...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Modal crear ruta -->
+<div class="modal-overlay" id="modal-ruta">
+  <div class="modal-box" style="max-width:680px;">
+    <h4><i class="bi bi-signpost-split-fill"></i> Nueva ruta</h4>
+    <div class="form-group">
+      <label>Código (ej: R02)</label>
+      <input type="text" id="ruta-codigo" placeholder="R02">
+    </div>
+    <div class="form-group">
+      <label>Nombre de la ruta</label>
+      <input type="text" id="ruta-nombre" placeholder="Ruta 2 — Zona Sur">
+    </div>
+    <div class="form-group">
+      <label>Descripción</label>
+      <textarea id="ruta-descripcion" rows="2"></textarea>
+    </div>
+
+    <label style="font-size:0.85rem; font-weight:600;"><i class="bi bi-cursor-fill"></i> Paradas — haz clic en el mapa para agregar</label>
+    <div id="mapa-crear-ruta" style="height:300px; border-radius:8px; margin:0.5rem 0;"></div>
+
+    <table class="tabla-sig" style="font-size:0.8rem;">
+      <thead><tr><th>#</th><th>Nombre</th><th>Latitud</th><th>Longitud</th><th></th></tr></thead>
+      <tbody id="lista-paradas-nuevas"></tbody>
+    </table>
+
+    <div class="modal-acciones">
+      <button type="button" class="btn-sig outline" onclick="cerrarModalRuta()"><i class="bi bi-x-lg"></i> Cancelar</button>
+      <button type="button" class="btn-sig" onclick="guardarRuta()"><i class="bi bi-check-lg"></i> Guardar ruta</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal gestionar paradas de una ruta existente -->
+<div class="modal-overlay" id="modal-paradas">
+  <div class="modal-box" style="max-width:720px;">
+    <h4 id="paradas-titulo"><i class="bi bi-geo-alt-fill"></i> Paradas de la ruta</h4>
+    <p style="font-size:0.82rem; color:#7f8c8d;">
+      Edita la latitud/longitud si la cámara física está instalada un poco más adelante o atrás de la coordenada original.
+    </p>
+    <div id="mapa-ver-paradas" style="height:280px; border-radius:8px; margin-bottom:0.8rem;"></div>
+
+    <table class="tabla-sig" style="font-size:0.82rem;">
+      <thead><tr><th>#</th><th>Nombre</th><th>Latitud</th><th>Longitud</th><th>Radio (m)</th><th></th></tr></thead>
+      <tbody id="tabla-paradas-existentes"></tbody>
+    </table>
+
+    <div class="modal-acciones">
+      <button type="button" class="btn-sig outline" onclick="cerrarModalParadas()"><i class="bi bi-x-lg"></i> Cerrar</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+  protegerPagina(["admin"]);
+  let paradasNuevas = [];
+  let mapaRuta = null;
+  let marcadoresParadas = [];
+
+  let mapaParadasExistentes = null;
+  let marcadoresParadasExistentes = [];
+  let rutaIdActual = null;
+
+  // ───────── Listado de rutas ─────────
+
+  async function cargarRutas() {
+    const resp = await apiFetch("/rutas/?activa=false");
+    if (!resp || !resp.ok) return;
+    const { data } = await resp.json();
+
+    const tbody = document.getElementById("tabla-rutas");
+    if (data.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#95a5a6;">Sin rutas registradas</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = data.map(r => `
+      <tr>
+        <td><strong>${r.codigo}</strong></td>
+        <td>${r.nombre}</td>
+        <td>${r.total_paradas}</td>
+        <td>${r.activa ? badgeEstado('aceptada') : badgeEstado('rechazada')}</td>
+        <td>
+          <button class="btn-sig outline" style="padding:0.3rem 0.6rem; font-size:0.78rem;" onclick="abrirModalParadas(${r.id}, '${r.codigo}')">
+            <i class="bi bi-geo-alt-fill"></i> Ver / Editar paradas
+          </button>
+        </td>
+      </tr>
+    `).join("");
+  }
+
+  // ───────── Modal: gestionar paradas existentes (lat/lon editable) ─────────
+
+  async function abrirModalParadas(rutaId, codigo) {
+    rutaIdActual = rutaId;
+    document.getElementById("paradas-titulo").innerHTML = `<i class="bi bi-geo-alt-fill"></i> Paradas de ${codigo}`;
+    document.getElementById("modal-paradas").classList.add("activo");
+
+    setTimeout(() => {
+      if (!mapaParadasExistentes) {
+        mapaParadasExistentes = L.map("mapa-ver-paradas").setView([-16.5050, -68.1700], 14);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "&copy; OpenStreetMap",
+        }).addTo(mapaParadasExistentes);
+      } else {
+        mapaParadasExistentes.invalidateSize();
+      }
+      cargarParadasExistentes();
+    }, 200);
+  }
+
+  async function cargarParadasExistentes() {
+    const resp = await apiFetch(`/rutas/${rutaIdActual}/paradas`);
+    const { data } = await resp.json();
+
+    // Limpiar marcadores anteriores
+    marcadoresParadasExistentes.forEach(m => mapaParadasExistentes.removeLayer(m));
+    marcadoresParadasExistentes = [];
+
+    if (data.length > 0) {
+      const bounds = [];
+      data.forEach(p => {
+        const marker = L.marker([p.latitud, p.longitud]).addTo(mapaParadasExistentes)
+          .bindPopup(`${p.orden}. ${p.nombre}`);
+        marcadoresParadasExistentes.push(marker);
+        bounds.push([p.latitud, p.longitud]);
+      });
+      mapaParadasExistentes.fitBounds(bounds, { padding: [30, 30] });
+    }
+
+    const tbody = document.getElementById("tabla-paradas-existentes");
+    if (data.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#95a5a6;">Sin paradas registradas</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = data.map(p => `
+      <tr data-parada-id="${p.id}">
+        <td>${p.orden}</td>
+        <td><input type="text" value="${p.nombre}" class="input-parada-nombre" style="width:120px; padding:0.3rem;"></td>
+        <td><input type="number" step="0.000001" value="${p.latitud}" class="input-parada-lat" style="width:110px; padding:0.3rem;"></td>
+        <td><input type="number" step="0.000001" value="${p.longitud}" class="input-parada-lon" style="width:110px; padding:0.3rem;"></td>
+        <td><input type="number" value="${p.radio_metros}" class="input-parada-radio" style="width:65px; padding:0.3rem;"></td>
+        <td style="white-space:nowrap;">
+          <button class="btn-sig ok" style="padding:0.25rem 0.5rem; font-size:0.72rem;" onclick="guardarParadaEditada(${p.id}, this)">
+            <i class="bi bi-check-lg"></i>
+          </button>
+          <button class="btn-sig alerta" style="padding:0.25rem 0.5rem; font-size:0.72rem;" onclick="eliminarParadaExistente(${p.id})">
+            <i class="bi bi-trash-fill"></i>
+          </button>
+        </td>
+      </tr>
+    `).join("");
+  }
+
+  async function guardarParadaEditada(paradaId, btnEl) {
+    const fila = btnEl.closest("tr");
+    const payload = {
+      nombre: fila.querySelector(".input-parada-nombre").value.trim(),
+      latitud: parseFloat(fila.querySelector(".input-parada-lat").value),
+      longitud: parseFloat(fila.querySelector(".input-parada-lon").value),
+      radio_metros: parseInt(fila.querySelector(".input-parada-radio").value),
+    };
+
+    const resp = await apiFetch(`/rutas/${rutaIdActual}/paradas/${paradaId}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      mostrarToast(data.mensaje, "error");
+      return;
+    }
+    mostrarToast("Parada actualizada (coordenadas guardadas)", "ok");
+    cargarParadasExistentes();
+    cargarRutas();
+  }
+
+  async function eliminarParadaExistente(paradaId) {
+    if (!confirm("¿Eliminar esta parada definitivamente?")) return;
+    const resp = await apiFetch(`/rutas/${rutaIdActual}/paradas/${paradaId}`, { method: "DELETE" });
+    const data = await resp.json();
+    if (!data.ok) {
+      mostrarToast(data.mensaje, "error");
+      return;
+    }
+    mostrarToast("Parada eliminada", "ok");
+    cargarParadasExistentes();
+    cargarRutas();
+  }
+
+  function cerrarModalParadas() {
+    document.getElementById("modal-paradas").classList.remove("activo");
+  }
+
+  // ───────── Modal: crear ruta nueva ─────────
+
+  function abrirModalRuta() {
+    paradasNuevas = [];
+    document.getElementById("ruta-codigo").value = "";
+    document.getElementById("ruta-nombre").value = "";
+    document.getElementById("ruta-descripcion").value = "";
+    document.getElementById("lista-paradas-nuevas").innerHTML = "";
+    document.getElementById("modal-ruta").classList.add("activo");
+
+    setTimeout(() => {
+      if (!mapaRuta) {
+        mapaRuta = L.map("mapa-crear-ruta").setView([-16.5050, -68.1700], 14);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "&copy; OpenStreetMap",
+        }).addTo(mapaRuta);
+
+        mapaRuta.on("click", (e) => {
+          const nombre = prompt("Nombre de la parada:", `Parada ${paradasNuevas.length + 1}`);
+          if (!nombre) return;
+          agregarParadaTemp(nombre, e.latlng.lat, e.latlng.lng);
+        });
+      } else {
+        mapaRuta.invalidateSize();
+      }
+    }, 200);
+  }
+
+  function agregarParadaTemp(nombre, lat, lon) {
+    paradasNuevas.push({ nombre, latitud: lat, longitud: lon, orden: paradasNuevas.length + 1 });
+
+    const marker = L.marker([lat, lon]).addTo(mapaRuta).bindPopup(nombre);
+    marcadoresParadas.push(marker);
+
+    renderListaParadas();
+  }
+
+  function renderListaParadas() {
+    document.getElementById("lista-paradas-nuevas").innerHTML = paradasNuevas.map((p, i) => `
+      <tr>
+        <td>${p.orden}</td>
+        <td><input type="text" value="${p.nombre}" style="width:110px; padding:0.25rem;" onchange="actualizarNombreTemp(${i}, this.value)"></td>
+        <td><input type="number" step="0.000001" value="${p.latitud.toFixed(6)}" style="width:105px; padding:0.25rem;" onchange="actualizarCoordTemp(${i}, 'latitud', this.value)"></td>
+        <td><input type="number" step="0.000001" value="${p.longitud.toFixed(6)}" style="width:105px; padding:0.25rem;" onchange="actualizarCoordTemp(${i}, 'longitud', this.value)"></td>
+        <td><button class="btn-sig alerta" style="padding:0.2rem 0.5rem; font-size:0.7rem;" onclick="quitarParadaTemp(${i})"><i class="bi bi-x-lg"></i></button></td>
+      </tr>
+    `).join("");
+  }
+
+  function actualizarNombreTemp(index, valor) {
+    paradasNuevas[index].nombre = valor.trim();
+    marcadoresParadas[index].setPopupContent(valor.trim());
+  }
+
+  function actualizarCoordTemp(index, campo, valor) {
+    paradasNuevas[index][campo] = parseFloat(valor);
+    const p = paradasNuevas[index];
+    marcadoresParadas[index].setLatLng([p.latitud, p.longitud]);
+  }
+
+  function quitarParadaTemp(index) {
+    mapaRuta.removeLayer(marcadoresParadas[index]);
+    marcadoresParadas.splice(index, 1);
+    paradasNuevas.splice(index, 1);
+    paradasNuevas.forEach((p, i) => p.orden = i + 1);
+    renderListaParadas();
+  }
+
+  function cerrarModalRuta() {
+    document.getElementById("modal-ruta").classList.remove("activo");
+  }
+
+  async function guardarRuta() {
+    const codigo = document.getElementById("ruta-codigo").value.trim();
+    const nombre = document.getElementById("ruta-nombre").value.trim();
+    const descripcion = document.getElementById("ruta-descripcion").value.trim();
+
+    if (!codigo || !nombre) {
+      mostrarToast("Código y nombre son obligatorios", "error");
+      return;
+    }
+    if (paradasNuevas.length === 0) {
+      if (!confirm("No agregaste paradas en el mapa. ¿Guardar la ruta sin paradas?")) return;
+    }
+
+    const resp = await apiFetch("/rutas/", {
+      method: "POST",
+      body: JSON.stringify({ codigo, nombre, descripcion, paradas: paradasNuevas }),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      mostrarToast(data.mensaje, "error");
+      return;
+    }
+    mostrarToast("Ruta creada correctamente", "ok");
+    cerrarModalRuta();
+    cargarRutas();
+  }
+
+  cargarRutas();
+</script>
+{% endblock %}

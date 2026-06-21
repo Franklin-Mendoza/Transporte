@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block titulo %}Alertas de Desvío — SIG Transporte{% endblock %}
+
+{% block contenido %}
+<div class="topbar">
+  <h2><i class="bi bi-exclamation-triangle-fill"></i> Alertas de Desvío</h2>
+  <div style="display:flex; gap:0.6rem;">
+    <input type="text" id="filtro-placa" placeholder="Filtrar por placa..." style="padding:0.4rem 0.7rem; border:1px solid var(--color-borde); border-radius:6px;" oninput="cargarAlertas()">
+    <select id="filtro-estado" style="width:auto; padding:0.4rem 0.7rem;" onchange="cargarAlertas()">
+      <option value="">Todos los estados</option>
+      <option value="pendiente">Pendiente</option>
+      <option value="justificada">Justificada</option>
+      <option value="rechazada">Rechazada</option>
+      <option value="sin_respuesta">Sin respuesta</option>
+    </select>
+  </div>
+</div>
+
+<div class="panel solo-admin">
+  <div class="panel-titulo"><i class="bi bi-clipboard-check-fill"></i> Justificaciones pendientes de revisión</div>
+  <table class="tabla-sig">
+    <thead>
+      <tr><th>Chofer</th><th>Motivo</th><th>Descripción</th><th>Enviada</th><th>Acciones</th></tr>
+    </thead>
+    <tbody id="tabla-justificaciones-pendientes">
+      <tr><td colspan="5" style="text-align:center; color:#95a5a6;">Cargando...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <div class="panel-titulo"><i class="bi bi-clock-history"></i> Historial de alertas</div>
+  <table class="tabla-sig">
+    <thead>
+      <tr><th>Fecha</th><th>Placa</th><th>Chofer</th><th>Distancia</th><th>Origen</th><th>Estado</th><th class="solo-admin">Acciones</th></tr>
+    </thead>
+    <tbody id="tabla-alertas">
+      <tr><td colspan="7" style="text-align:center; color:#95a5a6;">Cargando...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Modal revisar justificación (admin revisa las que mandó el chofer) -->
+<div class="modal-overlay" id="modal-revisar">
+  <div class="modal-box">
+    <h4><i class="bi bi-clipboard-check-fill"></i> Revisar justificación del chofer</h4>
+    <p><strong>Chofer:</strong> <span id="rev-chofer"></span></p>
+    <p><strong>Motivo:</strong> <span id="rev-motivo"></span></p>
+    <p><strong>Descripción:</strong> <span id="rev-descripcion"></span></p>
+    <div class="form-group">
+      <label>Comentario del admin (opcional)</label>
+      <textarea id="rev-comentario" rows="2" placeholder="Ej: Justificación válida, se acepta..."></textarea>
+    </div>
+    <div class="modal-acciones">
+      <button class="btn-sig outline" onclick="cerrarModalRevisar()"><i class="bi bi-x-lg"></i> Cancelar</button>
+      <button class="btn-sig alerta" onclick="revisarJustificacion('rechazada')"><i class="bi bi-x-circle-fill"></i> Rechazar</button>
+      <button class="btn-sig ok" onclick="revisarJustificacion('aceptada')"><i class="bi bi-check-circle-fill"></i> Aceptar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal registrar justificación directamente (admin la crea por el chofer) -->
+<div class="modal-overlay" id="modal-justificar-admin">
+  <div class="modal-box">
+    <h4><i class="bi bi-pencil-square"></i> Registrar justificación</h4>
+    <p style="font-size:0.85rem; color:#7f8c8d;">El admin puede registrar una justificación en nombre del chofer cuando este no puede hacerlo desde la app (ej: falla mecánica, accidente).</p>
+    <div class="form-group">
+      <label>Motivo</label>
+      <select id="justif-motivo">
+        <option value="gasolina">Fue a cargar gasolina</option>
+        <option value="emergencia">Emergencia</option>
+        <option value="desvio_trafico">Desvío por tráfico</option>
+        <option value="accidente">Accidente en la vía</option>
+        <option value="falla_mecanica">Falla mecánica (llanta, motor, etc.)</option>
+        <option value="orden_superior">Orden de un superior</option>
+        <option value="otro">Otro motivo</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Descripción</label>
+      <textarea id="justif-descripcion" rows="3" placeholder="Ej: El chofer reportó reventón de llanta en la Av. 6 de Marzo..."></textarea>
+    </div>
+    <div class="modal-acciones">
+      <button class="btn-sig outline" onclick="cerrarModalJustificar()"><i class="bi bi-x-lg"></i> Cancelar</button>
+      <button class="btn-sig" onclick="enviarJustificacionAdmin()"><i class="bi bi-send-fill"></i> Registrar</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+  const usuarioAlertas = protegerPagina(["admin", "autoridad"]);
+  let justificacionActualId = null;
+  let alertaParaJustificarId = null;
+  let alertaParaJustificarChoferId = null;
+
+  if (usuarioAlertas.rol !== "admin") {
+    document.querySelectorAll(".solo-admin").forEach(el => el.style.display = "none");
+  }
+
+  function origenAlerta(disparadaPor) {
+    const mapa = {
+      camara: `<i class="bi bi-camera-video-fill"></i> Cámara`,
+      pasajero: `<i class="bi bi-geo-alt-fill"></i> GPS pasajero`,
+      denuncia_pasajero: `<i class="bi bi-megaphone-fill"></i> Denuncia pasajero`,
+      sistema: `<i class="bi bi-gear-fill"></i> Sistema`,
+    };
+    return mapa[disparadaPor] || disparadaPor;
+  }
+
+  async function cargarJustificacionesPendientes() {
+    if (usuarioAlertas.rol !== "admin") return;
+    const resp = await apiFetch("/alertas/justificaciones/pendientes");
+    if (!resp || !resp.ok) return;
+    const { data } = await resp.json();
+
+    const tbody = document.getElementById("tabla-justificaciones-pendientes");
+    if (data.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#95a5a6;">No hay justificaciones pendientes del chofer</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = data.map(j => `
+      <tr>
+        <td>${j.chofer_id.slice(0,8)}...</td>
+        <td>${j.motivo}</td>
+        <td>${j.descripcion || "—"}</td>
+        <td>${formatearFecha(j.enviada_en)}</td>
+        <td>
+          <button class="btn-sig" style="padding:0.3rem 0.6rem; font-size:0.78rem;"
+            onclick='abrirModalRevisar(${j.id}, "${j.chofer_id}", "${j.motivo}", "${(j.descripcion||"").replace(/"/g,"&quot;")}") '>
+            <i class="bi bi-eye-fill"></i> Revisar
+          </button>
+        </td>
+      </tr>
+    `).join("");
+  }
+
+  function abrirModalRevisar(justifId, chofer, motivo, descripcion) {
+    justificacionActualId = justifId;
+    document.getElementById("rev-chofer").textContent = chofer;
+    document.getElementById("rev-motivo").textContent = motivo;
+    document.getElementById("rev-descripcion").textContent = descripcion || "Sin descripción";
+    document.getElementById("rev-comentario").value = "";
+    document.getElementById("modal-revisar").classList.add("activo");
+  }
+
+  function cerrarModalRevisar() {
+    document.getElementById("modal-revisar").classList.remove("activo");
+  }
+
+  async function revisarJustificacion(decision) {
+    const comentario = document.getElementById("rev-comentario").value.trim();
+    const resp = await apiFetch(`/alertas/justificaciones/${justificacionActualId}/revisar`, {
+      method: "PUT",
+      body: JSON.stringify({ decision, comentario }),
+    });
+    const data = await resp.json();
+    if (!data.ok) { mostrarToast(data.mensaje, "error"); return; }
+    mostrarToast(`Justificación ${decision}`, "ok");
+    cerrarModalRevisar();
+    cargarJustificacionesPendientes();
+    cargarAlertas();
+  }
+
+  function abrirModalJustificar(alertaId, choferId) {
+    alertaParaJustificarId = alertaId;
+    alertaParaJustificarChoferId = choferId;
+    document.getElementById("justif-motivo").value = "falla_mecanica";
+    document.getElementById("justif-descripcion").value = "";
+    document.getElementById("modal-justificar-admin").classList.add("activo");
+  }
+
+  function cerrarModalJustificar() {
+    document.getElementById("modal-justificar-admin").classList.remove("activo");
+  }
+
+  async function enviarJustificacionAdmin() {
+    const motivo = document.getElementById("justif-motivo").value;
+    const descripcion = document.getElementById("justif-descripcion").value.trim();
+
+    const resp = await apiFetch(`/alertas/${alertaParaJustificarId}/justificar-admin`, {
+      method: "POST",
+      body: JSON.stringify({ motivo, descripcion }),
+    });
+    const data = await resp.json();
+    if (!data.ok) { mostrarToast(data.mensaje, "error"); return; }
+
+    mostrarToast("Justificación registrada y aceptada", "ok");
+    cerrarModalJustificar();
+    cargarAlertas();
+    cargarJustificacionesPendientes();
+  }
+
+  async function cargarAlertas() {
+    const estado = document.getElementById("filtro-estado").value;
+    const placa = document.getElementById("filtro-placa").value.trim();
+    const params = new URLSearchParams();
+    if (estado) params.set("estado", estado);
+    if (placa) params.set("placa", placa);
+    const query = params.toString() ? `?${params.toString()}` : "";
+
+    const resp = await apiFetch(`/alertas/${query}`);
+    if (!resp || !resp.ok) return;
+    const { data } = await resp.json();
+
+    const esAdmin = usuarioAlertas.rol === "admin";
+    const tbody = document.getElementById("tabla-alertas");
+    if (data.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:#95a5a6;">Sin alertas</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = data.map(a => {
+      const puedeJustificar = esAdmin && a.estado === "pendiente" && !a.justificacion;
+      const accionBtn = puedeJustificar
+        ? `<button class="btn-sig outline" style="padding:0.25rem 0.5rem; font-size:0.75rem;"
+             onclick="abrirModalJustificar(${a.id}, '${a.chofer_id}')">
+             <i class="bi bi-pencil-fill"></i> Justificar
+           </button>`
+        : (a.justificacion
+            ? `<span style="font-size:0.75rem; color:var(--color-ok);"><i class="bi bi-check-circle-fill"></i> ${a.justificacion.motivo}</span>`
+            : "—");
+
+      return `
+        <tr>
+          <td>${formatearFecha(a.generada_en)}</td>
+          <td><strong>${a.placa || "—"}</strong></td>
+          <td>${a.chofer_nombre || "—"}</td>
+          <td>${a.distancia_metros ? a.distancia_metros.toFixed(0) + "m" : "—"}</td>
+          <td>${origenAlerta(a.disparada_por)}</td>
+          <td>${badgeEstado(a.estado)}</td>
+          <td class="solo-admin">${accionBtn}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  cargarJustificacionesPendientes();
+  cargarAlertas();
+  setInterval(() => { cargarJustificacionesPendientes(); cargarAlertas(); }, 20000);
+</script>
+{% endblock %}

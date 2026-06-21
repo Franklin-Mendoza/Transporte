@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block titulo %}Reportes — SIG Transporte{% endblock %}
+
+{% block contenido %}
+<div class="topbar">
+  <h2><i class="bi bi-file-earmark-spreadsheet-fill"></i> Reportes Excel</h2>
+</div>
+
+<div class="reportes-grid">
+
+  <!-- Cumplimiento de rutas -->
+  <div class="reporte-card">
+    <div class="reporte-card-header tipo-cumplimiento">
+      <i class="bi bi-bar-chart-fill"></i>
+      <div>
+        <div class="titulo">Cumplimiento de rutas</div>
+        <div class="subtitulo">Paradas OK vs. totales por turno</div>
+      </div>
+    </div>
+    <div class="reporte-card-body">
+      <p class="descripcion">Compara cuántas paradas completó cada minibús frente al total programado, en el rango de fechas que elijas.</p>
+      <div class="form-group">
+        <label><i class="bi bi-calendar-event"></i> Desde</label>
+        <input type="date" id="cumpl-desde">
+      </div>
+      <div class="form-group">
+        <label><i class="bi bi-calendar-event"></i> Hasta</label>
+        <input type="date" id="cumpl-hasta">
+      </div>
+      <button class="btn-sig" style="width:100%;" onclick="generarReporte('cumplimiento')">
+        <i class="bi bi-file-earmark-arrow-down-fill"></i> Generar Excel
+      </button>
+      <div class="reporte-status" id="status-cumplimiento">
+        <i class="bi bi-check-circle-fill"></i> Listo
+        <a href="#" id="link-cumplimiento"><i class="bi bi-download"></i> Descargar</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Calificaciones -->
+  <div class="reporte-card">
+    <div class="reporte-card-header tipo-calificaciones">
+      <i class="bi bi-star-fill"></i>
+      <div>
+        <div class="titulo">Calificaciones</div>
+        <div class="subtitulo">Puntaje final por chofer</div>
+      </div>
+    </div>
+    <div class="reporte-card-body">
+      <p class="descripcion">Calificación final de cada chofer en el período: paradas OK, alertas, faltas justificadas y nivel de desempeño.</p>
+      <div class="form-group">
+        <label><i class="bi bi-calendar-month"></i> Período</label>
+        <input type="month" id="calif-periodo">
+      </div>
+      <div style="flex:1;"></div>
+      <button class="btn-sig" style="width:100%;" onclick="generarReporte('calificaciones')">
+        <i class="bi bi-file-earmark-arrow-down-fill"></i> Generar Excel
+      </button>
+      <div class="reporte-status" id="status-calificaciones">
+        <i class="bi bi-check-circle-fill"></i> Listo
+        <a href="#" id="link-calificaciones"><i class="bi bi-download"></i> Descargar</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Alertas de desvío -->
+  <div class="reporte-card">
+    <div class="reporte-card-header tipo-alertas">
+      <i class="bi bi-exclamation-triangle-fill"></i>
+      <div>
+        <div class="titulo">Alertas de desvío</div>
+        <div class="subtitulo">Justificaciones y decisiones</div>
+      </div>
+    </div>
+    <div class="reporte-card-body">
+      <p class="descripcion">Detalle de cada alerta generada, su justificación (si la hubo) y si el admin la aceptó, rechazó o quedó sin respuesta.</p>
+      <div class="form-group">
+        <label><i class="bi bi-calendar-event"></i> Desde</label>
+        <input type="date" id="alert-desde">
+      </div>
+      <div class="form-group">
+        <label><i class="bi bi-calendar-event"></i> Hasta</label>
+        <input type="date" id="alert-hasta">
+      </div>
+      <button class="btn-sig" style="width:100%;" onclick="generarReporte('alertas')">
+        <i class="bi bi-file-earmark-arrow-down-fill"></i> Generar Excel
+      </button>
+      <div class="reporte-status" id="status-alertas">
+        <i class="bi bi-check-circle-fill"></i> Listo
+        <a href="#" id="link-alertas"><i class="bi bi-download"></i> Descargar</a>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+  protegerPagina(["admin", "autoridad"]);
+
+  async function generarReporte(tipo) {
+    let endpoint, payload;
+
+    if (tipo === "cumplimiento") {
+      endpoint = "/reportes/cumplimiento";
+      payload = {
+        desde: document.getElementById("cumpl-desde").value || null,
+        hasta: document.getElementById("cumpl-hasta").value || null,
+      };
+    } else if (tipo === "calificaciones") {
+      endpoint = "/reportes/calificaciones";
+      payload = { periodo: document.getElementById("calif-periodo").value || null };
+    } else {
+      endpoint = "/reportes/alertas";
+      payload = {
+        desde: document.getElementById("alert-desde").value || null,
+        hasta: document.getElementById("alert-hasta").value || null,
+      };
+    }
+
+    mostrarToast("Generando reporte...", "ok");
+    const resp = await apiFetch(endpoint, { method: "POST", body: JSON.stringify(payload) });
+    const data = await resp.json();
+
+    if (!data.ok) {
+      mostrarToast(data.mensaje || "Error generando reporte", "error");
+      return;
+    }
+
+    // Descarga con el token incluido vía fetch + blob (el <a href> normal no manda Authorization)
+    const descResp = await apiFetch(`/reportes/descargar/${data.data.archivo}`);
+    const blob = await descResp.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+
+    const link = document.getElementById(`link-${tipo}`);
+    link.href = blobUrl;
+    link.setAttribute("download", data.data.archivo);
+
+    document.getElementById(`status-${tipo}`).classList.add("visible");
+    mostrarToast("Reporte listo para descargar", "ok");
+  }
+</script>
+{% endblock %}

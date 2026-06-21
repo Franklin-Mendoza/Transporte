@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block titulo %}Mapa en tiempo real — SIG Transporte{% endblock %}
+
+{% block head_extra %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+<style>
+  .popup-bus { font-size: 0.85rem; }
+  .popup-bus strong { color: var(--color-header); }
+</style>
+{% endblock %}
+
+{% block contenido %}
+<div class="topbar">
+  <h2><i class="bi bi-geo-alt-fill"></i> Mapa en tiempo real</h2>
+  <div style="font-size:0.85rem; color:#7f8c8d;">
+    Actualiza cada 10s · <i class="bi bi-clock-fill"></i> <span id="reloj"></span>
+  </div>
+</div>
+
+<div class="panel">
+  <div id="mapa-tiempo-real"></div>
+  <div class="leyenda-mapa">
+    <div class="leyenda-item"><span class="punto-leyenda" style="background:#27AE60;"></span> En ruta</div>
+    <div class="leyenda-item"><span class="punto-leyenda" style="background:#E74C3C;"></span> Fuera de ruta</div>
+    <div class="leyenda-item"><span class="punto-leyenda" style="background:#95a5a6;"></span> Sin datos GPS</div>
+    <div class="leyenda-item"><span class="punto-leyenda" style="background:#D35400;"></span> Escaneo de pasajero</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-titulo"><i class="bi bi-bus-front-fill"></i> Estado actual de minibuses</div>
+  <table class="tabla-sig">
+    <thead>
+      <tr><th>Placa</th><th>Ruta</th><th>Chofer</th><th>Parada anterior</th><th>Última parada</th><th>Hora</th><th>Estado</th></tr>
+    </thead>
+    <tbody id="tabla-estado-buses">
+      <tr><td colspan="7" style="text-align:center; color:#95a5a6;">Cargando...</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+  protegerPagina(["admin", "autoridad"]);
+  iniciarReloj("reloj");
+
+  // Centro inicial: El Alto, La Paz, Bolivia
+  const mapa = L.map("mapa-tiempo-real").setView([-16.5050, -68.1700], 14);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors",
+    maxZoom: 19,
+  }).addTo(mapa);
+
+  let marcadores = {};
+  let marcadoresEscaneos = [];
+
+  function iconoEscaneo() {
+    return L.divIcon({
+      className: "",
+      html: `<div style="background:#D35400; width:16px; height:16px; border-radius:50%;
+                  border:2px solid white; box-shadow:0 1px 4px rgba(0,0,0,0.4);
+                  display:flex; align-items:center; justify-content:center; font-size:9px; color:white;">
+                  <i class="bi bi-qr-code-scan"></i>
+                </div>`,
+      iconSize: [16, 16],
+      iconAnchor: [8, 8],
+    });
+  }
+
+  async function actualizarEscaneos() {
+    const resp = await apiFetch("/registros/escaneos/mapa");
+    if (!resp || !resp.ok) return;
+    const { data } = await resp.json();
+
+    marcadoresEscaneos.forEach(m => mapa.removeLayer(m));
+    marcadoresEscaneos = [];
+
+    data.forEach(e => {
+      if (e.latitud_pasajero == null || e.longitud_pasajero == null) return;
+
+      const hora = new Date(e.escaneado_en).toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" });
+      const popupHtml = `
+        <div class="popup-bus">
+          <strong>Escaneo de pasajero</strong><br>
+          Bus: ${e.placa || "—"}<br>
+          Hora: ${hora}<br>
+          Plataforma: ${e.plataforma}
+        </div>
+      `;
+
+      const marker = L.circleMarker([e.latitud_pasajero, e.longitud_pasajero], {
+        radius: 6,
+        fillColor: "#D35400",
+        color: "white",
+        weight: 2,
+        fillOpacity: 0.85,
+      }).addTo(mapa).bindPopup(popupHtml);
+
+      marcadoresEscaneos.push(marker);
+    });
+  }
+
+  function colorEstado(enRuta) {
+    if (enRuta === true) return "#27AE60";
+    if (enRuta === false) return "#E74C3C";
+    return "#95a5a6";
+  }
+
+  function iconoBus(color) {
+    return L.divIcon({
+      className: "",
+      html: `<div style="background:${color}; width:28px; height:28px; border-radius:50%;
+                  display:flex; align-items:center; justify-content:center;
+                  border:3px solid white; box-shadow:0 2px 6px rgba(0,0,0,0.3); color:white; font-size:15px;">
+                  <i class="bi bi-bus-front-fill"></i>
+                </div>`,
+      iconSize: [28, 28],
+      iconAnchor: [14, 14],
+    });
+  }
+
+  async function actualizarMapa() {
+    const resp = await apiFetch("/registros/mapa");
+    if (!resp || !resp.ok) return;
+    const { data } = await resp.json();
+
+    // Actualizar tabla — orden: parada anterior (de donde viene) -> última parada (donde está ahora)
+    const tbody = document.getElementById("tabla-estado-buses");
+    if (data.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:#95a5a6;">Sin minibuses registrados</td></tr>`;
+    } else {
+      tbody.innerHTML = data.map(bus => {
+        let estadoTxt = "Sin datos";
+        let estadoClase = "sin_respuesta";
+        if (bus.en_ruta === true) { estadoTxt = "En ruta"; estadoClase = "aceptada"; }
+        if (bus.en_ruta === false) { estadoTxt = "Fuera de ruta"; estadoClase = "rechazada"; }
+
+        return `
+          <tr>
+            <td><strong>${bus.placa}</strong></td>
+            <td>${bus.ruta || "—"}</td>
+            <td>${bus.chofer || "—"}</td>
+            <td>${bus.parada_anterior || "—"}</td>
+            <td><strong>${bus.ultima_parada || "—"}</strong></td>
+            <td>${bus.ultima_actualizacion ? formatearFecha(bus.ultima_actualizacion) : "—"}</td>
+            <td><span class="badge-estado badge-${estadoClase}">${estadoTxt}</span></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    // Actualizar marcadores del mapa
+    data.forEach(bus => {
+      if (bus.latitud == null || bus.longitud == null) return;
+
+      const color = colorEstado(bus.en_ruta);
+      const popupHtml = `
+        <div class="popup-bus">
+          <strong>${bus.placa}</strong><br>
+          Ruta: ${bus.ruta || "—"}<br>
+          Chofer: ${bus.chofer || "—"}<br>
+          Viene de: ${bus.parada_anterior || "—"}<br>
+          Última parada: ${bus.ultima_parada || "—"}
+        </div>
+      `;
+
+      if (marcadores[bus.minibus_id]) {
+        marcadores[bus.minibus_id].setLatLng([bus.latitud, bus.longitud]);
+        marcadores[bus.minibus_id].setIcon(iconoBus(color));
+        marcadores[bus.minibus_id].setPopupContent(popupHtml);
+      } else {
+        marcadores[bus.minibus_id] = L.marker([bus.latitud, bus.longitud], { icon: iconoBus(color) })
+          .addTo(mapa)
+          .bindPopup(popupHtml);
+      }
+    });
+  }
+
+  actualizarMapa();
+  actualizarEscaneos();
+  setInterval(actualizarMapa, 10000);
+  setInterval(actualizarEscaneos, 15000);
+</script>
+{% endblock %}

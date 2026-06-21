@@ -1,0 +1,271 @@
+{% extends "base.html" %}
+{% block titulo %}Operación de Cámaras — SIG Transporte{% endblock %}
+
+{% block head_extra %}
+<style>
+  .camara-card {
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  }
+  .camara-card video {
+    width: 100%;
+    aspect-ratio: 4/3;
+    object-fit: cover;
+    background: #111;
+    display: block;
+  }
+  .camara-card-info {
+    padding: 0.8rem 1rem;
+  }
+  .camara-card-info .nombre {
+    font-weight: 700;
+    color: var(--color-header);
+    font-size: 0.95rem;
+  }
+  .camara-card-info .sub {
+    font-size: 0.78rem;
+    color: #7f8c8d;
+  }
+  .camara-card.detectando {
+    box-shadow: 0 0 0 3px #27AE60;
+  }
+  .camara-card.con-error {
+    box-shadow: 0 0 0 3px #E74C3C;
+  }
+  .grid-camaras-operacion {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.2rem;
+    margin-bottom: 1.5rem;
+  }
+</style>
+{% endblock %}
+
+{% block contenido %}
+<div class="topbar">
+  <h2><i class="bi bi-broadcast"></i> Operación de Cámaras en Vivo</h2>
+  <div style="display:flex; gap:0.6rem; align-items:center;">
+    <span id="estado-operacion" class="badge-estado badge-sin_respuesta">Detenido</span>
+    <button class="btn-sig ok" id="btn-iniciar-operacion" onclick="iniciarOperacion()">
+      <i class="bi bi-play-fill"></i> Iniciar todas las cámaras
+    </button>
+    <button class="btn-sig alerta" id="btn-detener-operacion" onclick="detenerOperacion()" style="display:none;">
+      <i class="bi bi-stop-fill"></i> Detener
+    </button>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-titulo">
+    <span><i class="bi bi-info-circle"></i> Mantén esta pestaña abierta en la PC donde están conectadas las cámaras. Cada vez que un minibús pase frente a una cámara y su QR sea legible, se registrará automáticamente.</span>
+  </div>
+</div>
+
+<div class="grid-camaras-operacion" id="grid-camaras"></div>
+
+<div class="panel">
+  <div class="panel-titulo"><i class="bi bi-clock-history"></i> Últimas detecciones de esta sesión</div>
+  <table class="tabla-sig">
+    <thead>
+      <tr><th>Hora</th><th>Parada</th><th>Código leído</th><th>Resultado</th></tr>
+    </thead>
+    <tbody id="tabla-detecciones">
+      <tr><td colspan="4" style="text-align:center; color:#95a5a6;">Sin detecciones todavía</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script src="{{ url_for('static', filename='js/vendor/jsQR.js') }}"></script>
+<script>
+  protegerPagina(["admin"]);
+
+  let camarasOperando = [];
+  let operacionActiva = false;
+  let huboDetecciones = false;
+
+  async function cargarAsignacionesActivas() {
+    const resp = await apiFetch("/camaras/");
+    const json = await resp.json();
+    if (!json.ok) {
+      mostrarToast("Error cargando cámaras: " + json.mensaje, "error");
+      return [];
+    }
+    return (json.data || []).filter(a => a.activa);
+  }
+
+  async function iniciarOperacion() {
+    // Verificación explícita y visible: si la librería de lectura de QR
+    // no cargó (por bloqueo de red, antivirus, o cualquier otra causa),
+    // se avisa aquí en pantalla en vez de fallar en silencio dentro del
+    // setInterval, que es muy difícil de diagnosticar sin abrir la consola.
+    if (typeof jsQR === "undefined") {
+      mostrarToast(
+        "Error crítico: la librería de lectura de QR no cargó. Recarga la página (Ctrl+F5) e intenta de nuevo.",
+        "error"
+      );
+      return;
+    }
+
+    const asignaciones = await cargarAsignacionesActivas();
+
+    if (asignaciones.length === 0) {
+      mostrarToast("No hay cámaras activas asignadas. Ve a 'Configurar cámaras' primero.", "error");
+      return;
+    }
+
+    operacionActiva = true;
+    document.getElementById("btn-iniciar-operacion").style.display = "none";
+    document.getElementById("btn-detener-operacion").style.display = "inline-block";
+    document.getElementById("estado-operacion").className = "badge-estado badge-aceptada";
+    document.getElementById("estado-operacion").textContent = "En operación";
+
+    const grid = document.getElementById("grid-camaras");
+    grid.innerHTML = "";
+
+    for (const asignacion of asignaciones) {
+      const card = document.createElement("div");
+      card.className = "camara-card";
+      card.id = `camara-card-${asignacion.id}`;
+      card.innerHTML = `
+        <video id="video-${asignacion.id}" autoplay playsinline muted></video>
+        <div class="camara-card-info">
+          <div class="nombre"><i class="bi bi-geo-alt-fill"></i> ${asignacion.parada_nombre}</div>
+          <div class="sub">${asignacion.device_label || "Cámara"}</div>
+          <div class="sub" id="contador-${asignacion.id}" style="margin-top:4px; color:#27AE60;">Iniciando...</div>
+        </div>
+      `;
+      grid.appendChild(card);
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { deviceId: { exact: asignacion.device_id } },
+        });
+        const videoEl = document.getElementById(`video-${asignacion.id}`);
+        videoEl.srcObject = stream;
+
+        const canvasEl = document.createElement("canvas");
+        const ctx = canvasEl.getContext("2d");
+
+        const camaraInfo = {
+          asignacion, stream, videoEl, canvasEl, ctx,
+          ultimoCodigo: null, ultimoTiempo: 0,
+        };
+
+        camaraInfo.intervalo = setInterval(() => procesarFrame(camaraInfo), 500);
+        camarasOperando.push(camaraInfo);
+      } catch (err) {
+        card.classList.add("con-error");
+        card.querySelector(".camara-card-info").innerHTML += `
+          <div style="color:#E74C3C; font-size:0.78rem; margin-top:4px;">
+            <i class="bi bi-exclamation-triangle-fill"></i> No se pudo abrir: ${err.message}
+          </div>
+        `;
+      }
+    }
+  }
+
+  function procesarFrame(camaraInfo) {
+    try {
+      const { videoEl, canvasEl, ctx, asignacion } = camaraInfo;
+      if (videoEl.readyState !== videoEl.HAVE_ENOUGH_DATA) return;
+
+      canvasEl.width = videoEl.videoWidth;
+      canvasEl.height = videoEl.videoHeight;
+      ctx.drawImage(videoEl, 0, 0, canvasEl.width, canvasEl.height);
+      const imageData = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+
+      // "attemptBoth" prueba la imagen normal Y invertida. Sin esto, jsQR
+      // solo intenta "dontInvert" por defecto, y muchos QRs mostrados en
+      // pantallas de celular o impresos con ciertos contrastes no se
+      // detectan nunca aunque la cámara los vea perfectamente.
+      const codigo = jsQR(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: "attemptBoth",
+      });
+
+      // Contador de diagnóstico: confirma visualmente que el frame SÍ se
+      // está procesando, aunque no se detecte ningún QR todavía.
+      camaraInfo.framesProcesados = (camaraInfo.framesProcesados || 0) + 1;
+      const contadorEl = document.getElementById(`contador-${asignacion.id}`);
+      if (contadorEl) {
+        contadorEl.textContent = `Frames analizados: ${camaraInfo.framesProcesados} · Resolución: ${canvasEl.width}x${canvasEl.height}`;
+      }
+
+      if (!codigo) return;
+
+      const ahora = Date.now();
+      if (codigo.data === camaraInfo.ultimoCodigo && (ahora - camaraInfo.ultimoTiempo) < 30000) {
+        return;
+      }
+
+      camaraInfo.ultimoCodigo = codigo.data;
+      camaraInfo.ultimoTiempo = ahora;
+      registrarDeteccion(camaraInfo, codigo.data);
+    } catch (err) {
+      console.error("Error procesando frame de cámara:", err);
+    }
+  }
+
+  async function registrarDeteccion(camaraInfo, codigoQr) {
+    const card = document.getElementById(`camara-card-${camaraInfo.asignacion.id}`);
+    card.classList.add("detectando");
+    setTimeout(() => card.classList.remove("detectando"), 1500);
+
+    try {
+      const resp = await apiFetch("/registros/camara", {
+        method: "POST",
+        body: JSON.stringify({
+          codigo_qr: codigoQr,
+          parada_id: camaraInfo.asignacion.parada_id,
+        }),
+      });
+      const data = await resp.json();
+      agregarFilaDeteccion(camaraInfo.asignacion.parada_nombre, codigoQr, data.ok, data.mensaje);
+    } catch (err) {
+      agregarFilaDeteccion(camaraInfo.asignacion.parada_nombre, codigoQr, false, "Error de conexión");
+    }
+  }
+
+  function agregarFilaDeteccion(paradaNombre, codigo, exito, mensaje) {
+    const tbody = document.getElementById("tabla-detecciones");
+    if (!huboDetecciones) {
+      tbody.innerHTML = "";
+      huboDetecciones = true;
+    }
+
+    const hora = new Date().toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const fila = document.createElement("tr");
+    fila.innerHTML = `
+      <td>${hora}</td>
+      <td>${paradaNombre}</td>
+      <td>${codigo}</td>
+      <td>${exito
+        ? `<span class="badge-estado badge-aceptada"><i class="bi bi-check-lg"></i> Registrado</span>`
+        : `<span class="badge-estado badge-rechazada">${mensaje || "Error"}</span>`}</td>
+    `;
+    tbody.insertBefore(fila, tbody.firstChild);
+  }
+
+  function detenerOperacion() {
+    operacionActiva = false;
+    camarasOperando.forEach(c => {
+      clearInterval(c.intervalo);
+      c.stream.getTracks().forEach(t => t.stop());
+    });
+    camarasOperando = [];
+
+    document.getElementById("grid-camaras").innerHTML = "";
+    document.getElementById("btn-iniciar-operacion").style.display = "inline-block";
+    document.getElementById("btn-detener-operacion").style.display = "none";
+    document.getElementById("estado-operacion").className = "badge-estado badge-sin_respuesta";
+    document.getElementById("estado-operacion").textContent = "Detenido";
+  }
+
+  window.addEventListener("beforeunload", () => {
+    if (operacionActiva) detenerOperacion();
+  });
+</script>
+{% endblock %}

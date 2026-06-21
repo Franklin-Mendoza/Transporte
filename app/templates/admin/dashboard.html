@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block titulo %}Dashboard — SIG Transporte{% endblock %}
+
+{% block contenido %}
+<div class="topbar">
+  <h2><i class="bi bi-speedometer2"></i> Dashboard General</h2>
+  <div style="font-size:0.85rem; color:#7f8c8d;">
+    <i class="bi bi-clock-fill"></i> <span id="reloj"></span>
+  </div>
+</div>
+
+<div class="grid-stats" id="grid-stats">
+  <div class="card-stat">
+    <div class="valor" id="stat-buses">—</div>
+    <div class="etiqueta">Buses activos</div>
+  </div>
+  <div class="card-stat ok">
+    <div class="valor" id="stat-cumplimiento">—</div>
+    <div class="etiqueta">Cumplimiento hoy</div>
+  </div>
+  <div class="card-stat warn">
+    <div class="valor" id="stat-alertas-hoy">—</div>
+    <div class="etiqueta">Alertas hoy</div>
+  </div>
+  <div class="card-stat alerta">
+    <div class="valor" id="stat-pendientes">—</div>
+    <div class="etiqueta">Alertas pendientes</div>
+  </div>
+</div>
+
+<div style="display:grid; grid-template-columns: 1fr 1fr; gap:1.3rem;">
+  <div class="panel">
+    <div class="panel-titulo"><i class="bi bi-trophy-fill" style="color:#F39C12;"></i> Top 5 choferes del mes</div>
+    <table class="tabla-sig">
+      <thead>
+        <tr><th>Chofer</th><th>Calificación</th><th>Nivel</th></tr>
+      </thead>
+      <tbody id="tabla-top-choferes">
+        <tr><td colspan="3" style="text-align:center; color:#95a5a6;">Cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <div class="panel-titulo"><i class="bi bi-exclamation-triangle-fill" style="color:#E74C3C;"></i> Necesitan atención</div>
+    <table class="tabla-sig">
+      <thead>
+        <tr><th>Chofer</th><th>Calificación</th><th>Nivel</th></tr>
+      </thead>
+      <tbody id="tabla-peor-desempeno">
+        <tr><td colspan="3" style="text-align:center; color:#95a5a6;">Cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+  protegerPagina(["admin", "autoridad"]);
+  iniciarReloj("reloj");
+
+  async function cargarDashboard() {
+    const resp = await apiFetch("/calificaciones/dashboard");
+    if (!resp || !resp.ok) {
+      mostrarToast("Error cargando el dashboard", "error");
+      return;
+    }
+    const { data } = await resp.json();
+
+    document.getElementById("stat-buses").textContent = data.resumen_hoy.buses_activos;
+    document.getElementById("stat-cumplimiento").textContent = data.resumen_hoy.cumplimiento_pct + "%";
+    document.getElementById("stat-alertas-hoy").textContent = data.resumen_hoy.alertas_generadas;
+    document.getElementById("stat-pendientes").textContent = data.resumen_hoy.alertas_pendientes;
+
+    const topBody = document.getElementById("tabla-top-choferes");
+    if (data.top_choferes_mes.length === 0) {
+      topBody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#95a5a6;">Sin datos este mes</td></tr>`;
+    } else {
+      topBody.innerHTML = data.top_choferes_mes.map(c => `
+        <tr>
+          <td>${c.chofer_nombre}</td>
+          <td><strong>${c.calificacion}%</strong></td>
+          <td>${badgeEstado(c.nivel)}</td>
+        </tr>
+      `).join("");
+    }
+
+    const peorBody = document.getElementById("tabla-peor-desempeno");
+    if (data.peor_desempeno_mes.length === 0) {
+      peorBody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:#95a5a6;">Sin datos este mes</td></tr>`;
+    } else {
+      peorBody.innerHTML = data.peor_desempeno_mes.map(c => `
+        <tr>
+          <td>${c.chofer_nombre}</td>
+          <td><strong>${c.calificacion}%</strong></td>
+          <td>${badgeEstado(c.nivel)}</td>
+        </tr>
+      `).join("");
+    }
+  }
+
+  cargarDashboard();
+  setInterval(cargarDashboard, 30000); // refresca cada 30s
+</script>
+{% endblock %}

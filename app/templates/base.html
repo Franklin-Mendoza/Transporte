@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block titulo %}SIG Transporte{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/panel.css') }}">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css">
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  <div class="app-layout">
+
+    <!-- ───────── Sidebar ───────── -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h4><i class="bi bi-bus-front-fill"></i> SIG Transporte</h4>
+        <small>Universidad Pública de El Alto</small>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="/dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a>
+        <a href="/mapa"><i class="bi bi-geo-alt-fill"></i> Mapa en tiempo real</a>
+        <a href="/escaneos"><i class="bi bi-qr-code-scan"></i> Escaneos de pasajeros</a>
+        <a href="/camaras" class="solo-admin"><i class="bi bi-camera-video-fill"></i> Configurar cámaras</a>
+        <a href="/operacion-camaras" class="solo-admin"><i class="bi bi-broadcast"></i> Operación en vivo</a>
+
+        <a href="/usuarios" class="solo-admin"><i class="bi bi-people-fill"></i> Usuarios</a>
+        <a href="/rutas" class="solo-admin"><i class="bi bi-signpost-split-fill"></i> Rutas y Paradas</a>
+        <a href="/minibuses" class="solo-admin"><i class="bi bi-bus-front"></i> Minibuses y QR</a>
+
+        <a href="/alertas"><i class="bi bi-exclamation-triangle-fill"></i> Alertas de desvío</a>
+        <a href="/calificaciones"><i class="bi bi-star-fill"></i> Calificaciones</a>
+        <a href="/reportes"><i class="bi bi-file-earmark-spreadsheet-fill"></i> Reportes Excel</a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div style="margin-bottom:0.5rem;">
+          <i class="bi bi-person-circle"></i> <span id="nombre-usuario-sesion">Usuario</span><br>
+          <small style="opacity:0.7;" id="rol-usuario-sesion"></small>
+        </div>
+        <button id="btn-logout"><i class="bi bi-box-arrow-right"></i> Cerrar sesión</button>
+      </div>
+    </aside>
+
+    <!-- ───────── Contenido principal ───────── -->
+    <main class="main-content">
+      {% block contenido %}{% endblock %}
+    </main>
+
+  </div>
+
+  <script src="{{ url_for('static', filename='js/common.js') }}"></script>
+  {% block scripts_extra %}{% endblock %}
+</body>
+</html>

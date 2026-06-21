@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block titulo %}Escaneos de Pasajeros — SIG Transporte{% endblock %}
+
+{% block head_extra %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+{% endblock %}
+
+{% block contenido %}
+<div class="topbar">
+  <h2><i class="bi bi-qr-code-scan"></i> Escaneos de Pasajeros</h2>
+  <input type="text" id="filtro-placa" placeholder="Filtrar por placa..." style="padding:0.4rem 0.7rem; border:1px solid var(--color-borde); border-radius:6px;" oninput="cargarEscaneos()">
+</div>
+
+<div class="panel">
+  <div class="panel-titulo">
+    <span><i class="bi bi-info-circle"></i> Cada vez que un pasajero escanea el QR de un minibús, queda registrada su ubicación GPS exacta</span>
+  </div>
+  <table class="tabla-sig">
+    <thead>
+      <tr><th>Fecha</th><th>Hora</th><th>Placa</th><th>Latitud</th><th>Longitud</th><th>Plataforma</th><th>¿En ruta?</th><th>Ubicación</th></tr>
+    </thead>
+    <tbody id="tabla-escaneos">
+      <tr><td colspan="8" style="text-align:center; color:#95a5a6;">Cargando...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Modal mini-mapa de un escaneo puntual -->
+<div class="modal-overlay" id="modal-mini-mapa">
+  <div class="modal-box" style="max-width:560px;">
+    <h4 id="mini-mapa-titulo"><i class="bi bi-geo-alt-fill"></i> Ubicación del escaneo</h4>
+    <div id="mini-mapa" style="height:320px; border-radius:10px; margin-bottom:0.8rem;"></div>
+    <p style="font-size:0.82rem; color:#7f8c8d;" id="mini-mapa-coords"></p>
+    <div class="modal-acciones">
+      <button class="btn-sig outline" onclick="cerrarMiniMapa()"><i class="bi bi-x-lg"></i> Cerrar</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+  protegerPagina(["admin", "autoridad"]);
+  let miniMapa = null;
+  let miniMapaMarker = null;
+
+  function aFechaBolivia(isoString) {
+    if (!isoString) return null;
+    // El backend manda la fecha en UTC sin indicar zona horaria explícita
+    // (datetime.utcnow() de Python no incluye 'Z' ni offset). Se fuerza
+    // la interpretación como UTC aquí y se formatea luego con timeZone
+    // explícito a Bolivia, sin importar la zona del navegador del usuario.
+    const conZ = isoString.endsWith("Z") ? isoString : isoString + "Z";
+    return new Date(conZ);
+  }
+
+  function formatearFechaSola(iso) {
+    const d = aFechaBolivia(iso);
+    if (!d) return "—";
+    return d.toLocaleDateString("es-BO", {
+      day: "2-digit", month: "2-digit", year: "numeric",
+      timeZone: "America/La_Paz",
+    });
+  }
+
+  function formatearHoraSola(iso) {
+    const d = aFechaBolivia(iso);
+    if (!d) return "—";
+    return d.toLocaleTimeString("es-BO", {
+      hour: "2-digit", minute: "2-digit",
+      timeZone: "America/La_Paz",
+    });
+  }
+
+  async function cargarEscaneos() {
+    const placa = document.getElementById("filtro-placa").value.trim();
+    const params = new URLSearchParams({ limite: 150 });
+    if (placa) params.set("placa", placa);
+
+    const resp = await apiFetch(`/registros/escaneos?${params.toString()}`);
+    if (!resp || !resp.ok) return;
+    const { data } = await resp.json();
+
+    const tbody = document.getElementById("tabla-escaneos");
+    if (data.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; color:#95a5a6;">Sin escaneos registrados</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = data.map(e => {
+      let estadoTxt = "Sin GPS";
+      let estadoClase = "sin_respuesta";
+      if (e.minibus_en_ruta === true) { estadoTxt = "En ruta"; estadoClase = "aceptada"; }
+      if (e.minibus_en_ruta === false) { estadoTxt = "Fuera de ruta"; estadoClase = "rechazada"; }
+
+      const plataformaIcono = e.plataforma === "app"
+        ? `<i class="bi bi-phone-fill"></i> App`
+        : `<i class="bi bi-globe"></i> Web`;
+
+      const tieneCoords = e.latitud_pasajero != null && e.longitud_pasajero != null;
+      const botonMapa = tieneCoords
+        ? `<button class="btn-sig outline" style="padding:0.25rem 0.5rem; font-size:0.75rem;"
+             onclick="verEnMapa(${e.latitud_pasajero}, ${e.longitud_pasajero}, '${e.placa || ''}', '${formatearHoraSola(e.escaneado_en)}')">
+             <i class="bi bi-map-fill"></i> Ver mapa
+           </button>`
+        : `<span style="color:#95a5a6; font-size:0.78rem;">Sin GPS</span>`;
+
+      return `
+        <tr>
+          <td>${formatearFechaSola(e.escaneado_en)}</td>
+          <td>${formatearHoraSola(e.escaneado_en)}</td>
+          <td><strong>${e.placa || "—"}</strong></td>
+          <td>${tieneCoords ? e.latitud_pasajero.toFixed(6) : "—"}</td>
+          <td>${tieneCoords ? e.longitud_pasajero.toFixed(6) : "—"}</td>
+          <td>${plataformaIcono}</td>
+          <td><span class="badge-estado badge-${estadoClase}">${estadoTxt}</span></td>
+          <td>${botonMapa}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  function verEnMapa(lat, lon, placa, hora) {
+    document.getElementById("mini-mapa-titulo").innerHTML =
+      `<i class="bi bi-geo-alt-fill"></i> Escaneo — ${placa || "Bus"} (${hora})`;
+    document.getElementById("mini-mapa-coords").textContent =
+      `Latitud: ${lat.toFixed(6)} · Longitud: ${lon.toFixed(6)}`;
+    document.getElementById("modal-mini-mapa").classList.add("activo");
+
+    setTimeout(() => {
+      if (!miniMapa) {
+        miniMapa = L.map("mini-mapa").setView([lat, lon], 16);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "&copy; OpenStreetMap",
+        }).addTo(miniMapa);
+      } else {
+        miniMapa.invalidateSize();
+        miniMapa.setView([lat, lon], 16);
+      }
+
+      if (miniMapaMarker) miniMapa.removeLayer(miniMapaMarker);
+      miniMapaMarker = L.marker([lat, lon]).addTo(miniMapa)
+        .bindPopup(`${placa || "Bus"}<br>${hora}`).openPopup();
+    }, 150);
+  }
+
+  function cerrarMiniMapa() {
+    document.getElementById("modal-mini-mapa").classList.remove("activo");
+  }
+
+  cargarEscaneos();
+  setInterval(cargarEscaneos, 30000);
+</script>
+{% endblock %}

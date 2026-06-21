@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block titulo %}Calificaciones — SIG Transporte{% endblock %}
+
+{% block contenido %}
+<div class="topbar">
+  <h2><i class="bi bi-star-fill"></i> Calificaciones de Choferes</h2>
+  <div style="display:flex; gap:0.6rem;">
+    <input type="text" id="filtro-placa" placeholder="Filtrar por placa..." style="padding:0.4rem 0.7rem; border:1px solid var(--color-borde); border-radius:6px;" oninput="cargarCalificaciones()">
+    <input type="month" id="filtro-periodo" style="padding:0.4rem 0.7rem; border:1px solid var(--color-borde); border-radius:6px;">
+    {% if rol == 'admin' %}
+    <button class="btn-sig" onclick="recalcularTodos()"><i class="bi bi-arrow-repeat"></i> Recalcular todos</button>
+    {% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <table class="tabla-sig">
+    <thead>
+      <tr>
+        <th>Chofer</th><th>CI</th><th>Placa</th><th>Paradas OK</th><th>Total paradas</th>
+        <th>Alertas</th><th>Faltas justificadas</th><th>Calificación</th><th>Nivel</th>
+      </tr>
+    </thead>
+    <tbody id="tabla-calificaciones">
+      <tr><td colspan="9" style="text-align:center; color:#95a5a6;">Cargando...</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+  protegerPagina(["admin", "autoridad"]);
+
+  function periodoActual() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  }
+
+  document.getElementById("filtro-periodo").value = periodoActual();
+  document.getElementById("filtro-periodo").addEventListener("change", cargarCalificaciones);
+
+  async function cargarCalificaciones() {
+    const periodo = document.getElementById("filtro-periodo").value || periodoActual();
+    const placa = document.getElementById("filtro-placa").value.trim();
+
+    const params = new URLSearchParams({ periodo });
+    if (placa) params.set("placa", placa);
+
+    const resp = await apiFetch(`/calificaciones/?${params.toString()}`);
+    if (!resp || !resp.ok) return;
+    const { data } = await resp.json();
+
+    const tbody = document.getElementById("tabla-calificaciones");
+    if (data.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; color:#95a5a6;">Sin calificaciones para este período</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = data.map(c => `
+      <tr>
+        <td>${c.chofer_nombre}</td>
+        <td>${c.chofer_ci || "—"}</td>
+        <td>${c.placa ? `<strong>${c.placa}</strong>` : "—"}</td>
+        <td>${c.paradas_ok}</td>
+        <td>${c.total_paradas}</td>
+        <td>${c.alertas_generadas}</td>
+        <td>${c.faltas_justificadas}</td>
+        <td><strong>${c.calificacion}%</strong></td>
+        <td>${badgeEstado(c.nivel)}</td>
+      </tr>
+    `).join("");
+  }
+
+  async function recalcularTodos() {
+    const periodo = document.getElementById("filtro-periodo").value || periodoActual();
+    const resp = await apiFetch("/calificaciones/calcular-todos", {
+      method: "POST",
+      body: JSON.stringify({ periodo }),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      mostrarToast("Error al recalcular", "error");
+      return;
+    }
+    mostrarToast("Calificaciones recalculadas", "ok");
+    cargarCalificaciones();
+  }
+
+  cargarCalificaciones();
+</script>
+{% endblock %}

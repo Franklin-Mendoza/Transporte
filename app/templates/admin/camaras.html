@@ -1,0 +1,359 @@
+{% extends "base.html" %}
+{% block titulo %}Configurar Cámaras — SIG Transporte{% endblock %}
+
+{% block contenido %}
+<div class="topbar">
+  <h2><i class="bi bi-camera-video-fill"></i> Configurar Cámaras</h2>
+  <button class="btn-sig" onclick="detectarCamaras()"><i class="bi bi-arrow-repeat"></i> Buscar cámaras</button>
+</div>
+
+<div class="panel" id="panel-sin-permiso" style="display:none;">
+  <div style="text-align:center; padding:1rem;">
+    <i class="bi bi-camera-video-off" style="font-size:2.5rem; color:#E74C3C;"></i>
+    <p style="margin-top:0.8rem;">Este navegador necesita permiso de cámara para detectar los dispositivos conectados.</p>
+    <button class="btn-sig" onclick="detectarCamaras()"><i class="bi bi-unlock-fill"></i> Dar permiso y buscar de nuevo</button>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-titulo">
+    <span><i class="bi bi-info-circle"></i> Asigna cada cámara USB conectada a esta PC a la parada donde está instalada físicamente</span>
+  </div>
+  <table class="tabla-sig">
+    <thead>
+      <tr><th>Ruta</th><th>Parada</th><th>Cámara asignada</th><th>Estado</th><th>Acciones</th></tr>
+    </thead>
+    <tbody id="tabla-paradas-camaras">
+      <tr><td colspan="5" style="text-align:center; color:#95a5a6;">Cargando...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- Modal asignar cámara -->
+<div class="modal-overlay" id="modal-asignar">
+  <div class="modal-box" style="max-width:560px;">
+    <h4><i class="bi bi-camera-video-fill"></i> Asignar cámara — <span id="asignar-parada-nombre"></span></h4>
+
+    <div class="form-group">
+      <label>Cámaras detectadas en esta PC</label>
+      <select id="select-camaras"></select>
+    </div>
+
+    <div id="preview-container" style="display:none;">
+      <video id="video-preview" autoplay playsinline style="width:100%; border-radius:10px; background:#000; margin-bottom:0.5rem;"></video>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;">
+        <span id="qr-status" style="font-size:0.82rem; color:#7f8c8d;"><i class="bi bi-qr-code"></i> Esperando código QR de prueba...</span>
+      </div>
+    </div>
+
+    <div class="modal-acciones">
+      <button class="btn-sig outline" onclick="cerrarModalAsignar()"><i class="bi bi-x-lg"></i> Cancelar</button>
+      <button class="btn-sig" onclick="guardarAsignacion()"><i class="bi bi-check-lg"></i> Guardar asignación</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal ver cámara en vivo (solo monitoreo, sin guardar) -->
+<div class="modal-overlay" id="modal-ver">
+  <div class="modal-box" style="max-width:560px;">
+    <h4><i class="bi bi-eye-fill"></i> Vista en vivo — <span id="ver-parada-nombre"></span></h4>
+    <video id="video-ver" autoplay playsinline style="width:100%; border-radius:10px; background:#000;"></video>
+    <p style="font-size:0.8rem; color:#7f8c8d; margin-top:0.5rem;">
+      <i class="bi bi-info-circle"></i> Confirma que la cámara apunte correctamente al lugar por donde pasará el QR del minibús.
+    </p>
+    <div class="modal-acciones">
+      <button class="btn-sig outline" onclick="cerrarModalVer()"><i class="bi bi-x-lg"></i> Cerrar</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts_extra %}
+<script src="{{ url_for('static', filename='js/vendor/jsQR.js') }}"></script>
+<script>
+  protegerPagina(["admin"]);
+
+  let camarasDisponibles = [];
+  let asignacionesActuales = [];
+  let rutasConParadas = [];
+
+  let streamModalAsignar = null;
+  let streamModalVer = null;
+  let intervaloLecturaQr = null;
+  let paradaSeleccionadaId = null;
+
+  // ───────── Detección de cámaras del navegador ─────────
+
+  async function detectarCamaras() {
+    try {
+      // Pedimos permiso abriendo brevemente un stream; sin esto, los
+      // navegadores no revelan los nombres reales de las cámaras
+      // (label vendría vacío por privacidad hasta dar el permiso).
+      const permisoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      permisoStream.getTracks().forEach(t => t.stop());
+
+      const dispositivos = await navigator.mediaDevices.enumerateDevices();
+      camarasDisponibles = dispositivos.filter(d => d.kind === "videoinput");
+
+      document.getElementById("panel-sin-permiso").style.display = "none";
+
+      if (camarasDisponibles.length === 0) {
+        mostrarToast("No se detectó ninguna cámara conectada a esta PC", "error");
+      } else {
+        mostrarToast(`${camarasDisponibles.length} cámara(s) detectada(s)`, "ok");
+      }
+    } catch (err) {
+      // Este catch es SOLO de la cámara (navigator.mediaDevices), nunca
+      // de la API del backend. Si ves este mensaje, el problema es
+      // específicamente el permiso de cámara del navegador, nada más.
+      document.getElementById("panel-sin-permiso").style.display = "block";
+      mostrarToast("Permiso de cámara denegado o no disponible: " + err.message, "error");
+    }
+  }
+
+  // ───────── Cargar rutas + paradas + asignaciones existentes ─────────
+
+  async function cargarDatos() {
+    try {
+      const [rutasResp, camarasResp] = await Promise.all([
+        apiFetch("/rutas/"),
+        apiFetch("/camaras/"),
+      ]);
+
+      const rutasJson = await rutasResp.json();
+      const camarasJson = await camarasResp.json();
+
+      // Si la API devolvió un error (500, 401, etc.), lo mostramos tal cual
+      // es — nunca lo confundimos con un problema de permisos de cámara.
+      if (!rutasJson.ok) {
+        mostrarToast("Error cargando rutas: " + rutasJson.mensaje, "error");
+        return;
+      }
+      if (!camarasJson.ok) {
+        mostrarToast("Error cargando cámaras: " + camarasJson.mensaje, "error");
+        return;
+      }
+
+      const rutas = rutasJson.data || [];
+      asignacionesActuales = camarasJson.data || [];
+
+      rutasConParadas = [];
+      for (const ruta of rutas) {
+        const respParadas = await apiFetch(`/rutas/${ruta.id}/paradas`);
+        const paradasJson = await respParadas.json();
+        rutasConParadas.push({ ...ruta, paradas: paradasJson.data || [] });
+      }
+
+      renderTabla();
+    } catch (err) {
+      mostrarToast("Error inesperado cargando los datos: " + err.message, "error");
+      console.error(err);
+    }
+  }
+
+
+  function renderTabla() {
+    const tbody = document.getElementById("tabla-paradas-camaras");
+    const filas = [];
+
+    rutasConParadas.forEach(ruta => {
+      ruta.paradas.forEach(parada => {
+        const asignacion = asignacionesActuales.find(a => a.parada_id === parada.id);
+
+        let estadoHtml = `<span class="badge-estado badge-sin_respuesta">Sin cámara</span>`;
+        let camaraTexto = "—";
+        if (asignacion) {
+          camaraTexto = asignacion.device_label || "Cámara sin nombre";
+          estadoHtml = asignacion.activa
+            ? `<span class="badge-estado badge-aceptada">Activa</span>`
+            : `<span class="badge-estado badge-rechazada">Desactivada</span>`;
+        }
+
+        filas.push(`
+          <tr>
+            <td>${ruta.codigo}</td>
+            <td><strong>${parada.nombre}</strong></td>
+            <td>${camaraTexto}</td>
+            <td>${estadoHtml}</td>
+            <td style="white-space:nowrap;">
+              <button class="btn-sig outline" style="padding:0.3rem 0.6rem; font-size:0.76rem;"
+                onclick="abrirModalAsignar(${parada.id}, '${parada.nombre.replace(/'/g, "\\'")}')">
+                <i class="bi bi-camera-video-fill"></i> ${asignacion ? "Cambiar" : "Asignar"}
+              </button>
+              ${asignacion ? `
+                <button class="btn-sig outline" style="padding:0.3rem 0.6rem; font-size:0.76rem;"
+                  onclick="abrirModalVer('${asignacion.device_id}', '${parada.nombre.replace(/'/g, "\\'")}')">
+                  <i class="bi bi-eye-fill"></i> Ver
+                </button>
+                <button class="btn-sig ${asignacion.activa ? 'alerta' : 'ok'}" style="padding:0.3rem 0.6rem; font-size:0.76rem;"
+                  onclick="alternarActiva(${asignacion.id})">
+                  <i class="bi bi-power"></i> ${asignacion.activa ? "Desactivar" : "Activar"}
+                </button>
+              ` : ""}
+            </td>
+          </tr>
+        `);
+      });
+    });
+
+    tbody.innerHTML = filas.length > 0
+      ? filas.join("")
+      : `<tr><td colspan="5" style="text-align:center; color:#95a5a6;">No hay rutas con paradas registradas todavía</td></tr>`;
+  }
+
+  // ───────── Modal: asignar cámara a una parada ─────────
+
+  async function abrirModalAsignar(paradaId, paradaNombre) {
+    paradaSeleccionadaId = paradaId;
+    document.getElementById("asignar-parada-nombre").textContent = paradaNombre;
+    document.getElementById("preview-container").style.display = "none";
+
+    if (camarasDisponibles.length === 0) {
+      await detectarCamaras();
+    }
+
+    const select = document.getElementById("select-camaras");
+    select.innerHTML = camarasDisponibles.map((cam, i) =>
+      `<option value="${cam.deviceId}">${cam.label || `Cámara ${i + 1}`}</option>`
+    ).join("");
+
+    select.onchange = () => iniciarPreviewAsignar(select.value);
+
+    document.getElementById("modal-asignar").classList.add("activo");
+
+    if (camarasDisponibles.length > 0) {
+      iniciarPreviewAsignar(select.value);
+    }
+  }
+
+  async function iniciarPreviewAsignar(deviceId) {
+    detenerStreamAsignar();
+
+    try {
+      streamModalAsignar = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } },
+      });
+      const video = document.getElementById("video-preview");
+      video.srcObject = streamModalAsignar;
+      document.getElementById("preview-container").style.display = "block";
+
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
+      const statusEl = document.getElementById("qr-status");
+
+      intervaloLecturaQr = setInterval(() => {
+        try {
+          if (video.readyState !== video.HAVE_ENOUGH_DATA) return;
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const codigo = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: "attemptBoth",
+          });
+
+          if (codigo) {
+            statusEl.innerHTML = `<i class="bi bi-check-circle-fill" style="color:#27AE60;"></i> QR detectado: <strong>${codigo.data}</strong>`;
+          } else {
+            statusEl.innerHTML = `<i class="bi bi-qr-code"></i> Esperando código QR de prueba...`;
+          }
+        } catch (err) {
+          statusEl.innerHTML = `<i class="bi bi-exclamation-triangle-fill" style="color:#E74C3C;"></i> Error leyendo QR: ${err.message}`;
+          console.error(err);
+        }
+      }, 400);
+    } catch (err) {
+      mostrarToast("No se pudo abrir esta cámara: " + err.message, "error");
+    }
+  }
+
+  function detenerStreamAsignar() {
+    if (streamModalAsignar) {
+      streamModalAsignar.getTracks().forEach(t => t.stop());
+      streamModalAsignar = null;
+    }
+    if (intervaloLecturaQr) {
+      clearInterval(intervaloLecturaQr);
+      intervaloLecturaQr = null;
+    }
+  }
+
+  function cerrarModalAsignar() {
+    detenerStreamAsignar();
+    document.getElementById("modal-asignar").classList.remove("activo");
+  }
+
+  async function guardarAsignacion() {
+    const select = document.getElementById("select-camaras");
+    const deviceId = select.value;
+    const deviceLabel = select.options[select.selectedIndex]?.text || "Cámara sin nombre";
+
+    if (!deviceId) {
+      mostrarToast("Selecciona una cámara primero", "error");
+      return;
+    }
+
+    const resp = await apiFetch("/camaras/asignar", {
+      method: "POST",
+      body: JSON.stringify({
+        parada_id: paradaSeleccionadaId,
+        device_id: deviceId,
+        device_label: deviceLabel,
+      }),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      mostrarToast(data.mensaje, "error");
+      return;
+    }
+    mostrarToast("Cámara asignada correctamente", "ok");
+    cerrarModalAsignar();
+    cargarDatos();
+  }
+
+  // ───────── Modal: ver cámara en vivo (solo monitoreo) ─────────
+
+  async function abrirModalVer(deviceId, paradaNombre) {
+    document.getElementById("ver-parada-nombre").textContent = paradaNombre;
+    document.getElementById("modal-ver").classList.add("activo");
+
+    try {
+      streamModalVer = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: deviceId } },
+      });
+      document.getElementById("video-ver").srcObject = streamModalVer;
+    } catch (err) {
+      mostrarToast("No se pudo abrir esta cámara. Puede estar desconectada: " + err.message, "error");
+      cerrarModalVer();
+    }
+  }
+
+  function cerrarModalVer() {
+    if (streamModalVer) {
+      streamModalVer.getTracks().forEach(t => t.stop());
+      streamModalVer = null;
+    }
+    document.getElementById("modal-ver").classList.remove("activo");
+  }
+
+  // ───────── Activar / desactivar cámara ─────────
+
+  async function alternarActiva(asignacionId) {
+    const resp = await apiFetch(`/camaras/${asignacionId}/activar`, { method: "PUT" });
+    const data = await resp.json();
+    if (!data.ok) {
+      mostrarToast(data.mensaje, "error");
+      return;
+    }
+    mostrarToast("Estado actualizado", "ok");
+    cargarDatos();
+  }
+
+  // ───────── Inicio ─────────
+
+  detectarCamaras();
+  cargarDatos();
+
+  navigator.mediaDevices.addEventListener("devicechange", detectarCamaras);
+</script>
+{% endblock %}
