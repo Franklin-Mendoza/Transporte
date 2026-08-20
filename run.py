@@ -1,11 +1,14 @@
 import os
 from flask import Flask
 
-# Crear la aplicación
+# ============================================
+# CREAR LA APLICACIÓN
+# ============================================
+
 app = Flask(__name__)
 
 # ============================================
-# RUTA PRINCIPAL - MUESTRA LAS CREDENCIALES
+# RUTAS
 # ============================================
 
 @app.route('/')
@@ -23,8 +26,6 @@ def index():
             .credenciales h3 { color: #2e7d32; margin: 0 0 10px 0; }
             .btn { display: inline-block; padding: 12px 30px; background: #1a73e8; color: white; text-decoration: none; border-radius: 5px; margin-top: 10px; }
             .btn:hover { background: #1557b0; }
-            .error { color: red; }
-            .success { color: green; }
             .info { color: #666; font-size: 12px; margin-top: 20px; }
         </style>
     </head>
@@ -38,10 +39,6 @@ def index():
                 <p style="font-size:18px;"><strong>Usuario:</strong> <span style="color:#1a73e8;">00000001</span></p>
                 <p style="font-size:18px;"><strong>Contraseña:</strong> <span style="color:#1a73e8;">admin123</span></p>
             </div>
-            
-            <p>
-                <a href="/reset" class="btn">🔄 Restablecer Contraseña</a>
-            </p>
             
             <p class="info">Solo personal autorizado (Admin / Autoridad)</p>
             <p class="info">El acceso de choferes y pasajeros es desde la app móvil</p>
@@ -81,43 +78,17 @@ def reset():
     </html>
     '''
 
-@app.route('/admin')
-def admin():
-    return '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Panel de Administración</title>
-        <style>
-            body { font-family: Arial; margin: 50px; background: #f0f2f5; }
-            .container { max-width: 600px; margin: 0 auto; padding: 30px; background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-            h1 { color: #1a73e8; }
-            .menu { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0; }
-            .menu a { flex: 1; min-width: 120px; padding: 15px; background: #e8f0fe; color: #1a73e8; text-decoration: none; border-radius: 5px; text-align: center; }
-            .menu a:hover { background: #d2e3fc; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🚌 SÍG Transporte</h1>
-            <h2>Panel de Administración</h2>
-            <div style="background:#e8f5e9;padding:15px;border-radius:5px;border:2px solid #4caf50;">
-                <p><strong>✅ Sesión iniciada como:</strong> Administrador (00000001)</p>
-            </div>
-            <div class="menu">
-                <a href="/">📊 Dashboard</a>
-                <a href="/reset">🔄 Resetear</a>
-            </div>
-            <p style="color:#666;font-size:12px;margin-top:20px;">Solo personal autorizado</p>
-        </div>
-    </body>
-    </html>
-    '''
+# ============================================
+# ESTO ES OBLIGATORIO PARA QUE RENDER FUNCIONE
+# ============================================
+
+# La variable 'app' ya está definida arriba
+# Gunicorn la usará para ejecutar la aplicación
 
 # ============================================
-# EJECUTAR LA APLICACIÓN
+# SOLO PARA EJECUCIÓN LOCAL
 # ============================================
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=True)
