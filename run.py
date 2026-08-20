@@ -6,15 +6,11 @@ import sqlite3
 import os
 
 # ============================================
-# CREAR APP DIRECTAMENTE AQUÍ
+# APP SIMPLE PARA RECUPERAR CONTRASEÑA
 # ============================================
 
 app = Flask(__name__)
 app.secret_key = 'clave-secreta-para-desarrollo'
-
-# ============================================
-# RUTAS PARA RECUPERAR CONTRASEÑA
-# ============================================
 
 @app.route('/')
 def index():
@@ -29,19 +25,19 @@ def index():
             h1 { color: #1a73e8; }
             .btn { display: inline-block; padding: 10px 20px; margin: 5px; background: #1a73e8; color: white; text-decoration: none; border-radius: 5px; }
             .btn:hover { background: #1557b0; }
-            .success { color: green; }
-            .error { color: red; }
         </style>
     </head>
     <body>
         <div class="container">
             <h1>🚌 SÍG Transporte</h1>
             <h2>🔐 Recuperación de Contraseña</h2>
-            <p>Usuario: <b>00000001</b></p>
-            <p>Contraseña: <b>admin123</b></p>
+            <div style="background:#e8f0fe;padding:15px;border-radius:5px;margin:20px 0;">
+                <p><strong>Usuario:</strong> 00000001</p>
+                <p><strong>Contraseña:</strong> admin123</p>
+            </div>
             <hr>
             <p>
-                <a href="/reset-admin" class="btn">🔄 Restablecer Contraseña</a>
+                <a href="/reset-admin" class="btn">🔄 Restablecer</a>
                 <a href="/ver-tablas" class="btn">📊 Ver Tablas</a>
                 <a href="/crear-admin" class="btn">➕ Crear Admin</a>
                 <a href="/ver-usuarios" class="btn">👥 Ver Usuarios</a>
@@ -61,7 +57,7 @@ def ver_tablas():
             db_path = 'transporte.db'
         
         if not os.path.exists(db_path):
-            return "❌ No se encontró la base de datos"
+            return f"❌ No se encontró la base de datos en: {db_path}"
         
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
@@ -78,18 +74,6 @@ def ver_tablas():
             count = cursor.fetchone()[0]
             html += f"<li><b>{nombre}</b> ({count} registros) - Columnas: {', '.join(columnas)}</li>"
         html += "</ul>"
-        
-        # Mostrar contenido de tabla usuario si existe
-        for t in tablas:
-            if t[0].lower() in ['usuario', 'admin', 'usuarios', 'user']:
-                cursor.execute(f"SELECT * FROM {t[0]} LIMIT 5")
-                datos = cursor.fetchall()
-                if datos:
-                    html += f"<h3>Datos de '{t[0]}':</h3><ul>"
-                    for d in datos:
-                        html += f"<li>{d}</li>"
-                    html += "</ul>"
-        
         conn.close()
         return html
     except Exception as e:
@@ -105,7 +89,6 @@ def ver_usuarios():
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Buscar tabla de usuarios
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tablas = cursor.fetchall()
         
@@ -132,7 +115,7 @@ def ver_usuarios():
         conn.close()
         
         if "Tabla:" not in resultado:
-            resultado += "<p>❌ No se encontró tabla de usuarios</p>"
+            resultado += f"<p>❌ No se encontró tabla de usuarios. Tablas: {[t[0] for t in tablas]}</p>"
         
         return resultado
     except Exception as e:
@@ -148,7 +131,6 @@ def reset_admin():
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Buscar tabla de usuarios
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tablas = cursor.fetchall()
         
@@ -160,20 +142,15 @@ def reset_admin():
                 break
         
         if not tabla_usuario:
-            return f"❌ No hay tabla de usuarios. Tablas disponibles: {[t[0] for t in tablas]}"
+            return f"❌ No hay tabla de usuarios. Tablas: {[t[0] for t in tablas]}"
         
-        # Ver columnas
         cursor.execute(f"PRAGMA table_info({tabla_usuario})")
         columnas = [col[1] for col in cursor.fetchall()]
         
-        mensaje = ""
-        
         if 'ci' in columnas and 'password' in columnas:
-            # Actualizar contraseña del admin
             cursor.execute(f"UPDATE {tabla_usuario} SET password = 'admin123' WHERE ci = '00000001'")
             
             if cursor.rowcount == 0:
-                # Si no existe, crearlo
                 if 'rol' in columnas:
                     cursor.execute(f"INSERT INTO {tabla_usuario} (ci, password, rol) VALUES ('00000001', 'admin123', 'admin')")
                 else:
@@ -186,7 +163,7 @@ def reset_admin():
             conn.close()
             return f"{mensaje} en tabla '{tabla_usuario}'<br><br>Usuario: <b>00000001</b><br>Contraseña: <b>admin123</b>"
         else:
-            return f"❌ La tabla {tabla_usuario} no tiene las columnas necesarias. Columnas: {columnas}"
+            return f"❌ La tabla {tabla_usuario} no tiene columnas 'ci' o 'password'. Columnas: {columnas}"
             
     except Exception as e:
         return f"❌ Error: {str(e)}"
@@ -201,7 +178,6 @@ def crear_admin():
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Buscar tabla de usuarios
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tablas = cursor.fetchall()
         
@@ -213,16 +189,14 @@ def crear_admin():
                 break
         
         if not tabla_usuario:
-            return f"❌ No hay tabla de usuarios. Tablas disponibles: {[t[0] for t in tablas]}"
+            return f"❌ No hay tabla de usuarios. Tablas: {[t[0] for t in tablas]}"
         
         cursor.execute(f"PRAGMA table_info({tabla_usuario})")
         columnas = [col[1] for col in cursor.fetchall()]
         
         if 'ci' in columnas and 'password' in columnas:
-            # Eliminar si existe
             cursor.execute(f"DELETE FROM {tabla_usuario} WHERE ci = '00000001'")
             
-            # Insertar nuevo admin
             if 'rol' in columnas:
                 cursor.execute(f"INSERT INTO {tabla_usuario} (ci, password, rol) VALUES ('00000001', 'admin123', 'admin')")
             else:
@@ -232,7 +206,7 @@ def crear_admin():
             conn.close()
             return f"✅ Admin creado en tabla '{tabla_usuario}'<br><br>Usuario: <b>00000001</b><br>Contraseña: <b>admin123</b>"
         else:
-            return f"❌ La tabla {tabla_usuario} no tiene las columnas necesarias"
+            return f"❌ La tabla {tabla_usuario} no tiene columnas 'ci' o 'password'"
     except Exception as e:
         return f"❌ Error: {str(e)}"
 
@@ -243,15 +217,4 @@ def crear_admin():
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", 5000))
-    debug = os.getenv("FLASK_DEBUG", "True").lower() == "true"
-    
-    print(f"""
-╔══════════════════════════════════════════╗
-║      SIG TRANSPORTE — Recuperación       ║
-║  Servidor: http://{host}:{port}           ║
-║  Usuario: 00000001                       ║
-║  Contraseña: admin123                    ║
-╚══════════════════════════════════════════╝
-    """)
-    
-    app.run(host=host, port=port, debug=debug)
+    app.run(host=host, port=port, debug=False)
