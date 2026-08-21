@@ -8,10 +8,9 @@ app = Flask(__name__)
 app.secret_key = 'clave-secreta-para-desarrollo'
 
 # ============================================
-# LOGIN SIN BASE DE DATOS (CREDENCIALES FIJAS)
+# LOGIN SIN BASE DE DATOS
 # ============================================
 
-# Credenciales correctas
 USUARIO_CORRECTO = '00000001'
 CONTRASENA_CORRECTA = 'admin123'
 
@@ -23,7 +22,7 @@ def index():
     <head>
         <title>SÍG Transporte</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; }
+            body { font-family: Arial; margin: 0; padding: 0; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; }
             .container { max-width: 400px; padding: 40px; background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }
             h1 { color: #1a73e8; }
             .input-group { margin: 15px 0; text-align: left; }
@@ -39,13 +38,11 @@ def index():
         <div class="container">
             <h1>🚌 SÍG Transporte</h1>
             <h2 style="color:#666;font-size:18px;">Panel de Administración</h2>
-            
             {% with messages = get_flashed_messages() %}
                 {% if messages %}
                     <div class="error">{{ messages[0] }}</div>
                 {% endif %}
             {% endwith %}
-            
             <form method="POST" action="/login">
                 <div class="input-group">
                     <label>Número de CI</label>
@@ -57,8 +54,7 @@ def index():
                 </div>
                 <button type="submit" class="btn">Ingresar</button>
             </form>
-            
-            <p class="footer">Solo personal autorizado (Admin / Autoridad)<br>El acceso de choferes y pasajeros es desde la app móvil</p>
+            <p class="footer">Solo personal autorizado (Admin / Autoridad)</p>
         </div>
     </body>
     </html>
@@ -114,37 +110,17 @@ def dashboard():
                 <a href="/logout">Cerrar sesión</a>
             </div>
         </div>
-        
         <div class="container">
             <div class="card">
                 <h2>📊 Panel de Administración</h2>
-                <p style="color:green;font-weight:bold;">✅ ¡Bienvenido al sistema de gestión de transporte!</p>
-                <p>Has iniciado sesión correctamente con las credenciales:</p>
-                <ul>
-                    <li><strong>Usuario:</strong> 00000001</li>
-                    <li><strong>Contraseña:</strong> admin123</li>
-                </ul>
+                <p style="color:green;font-weight:bold;">✅ ¡Bienvenido al sistema!</p>
             </div>
-            
             <div class="grid">
-                <div class="stat">
-                    <h3>👥 Usuarios</h3>
-                    <div class="number">1</div>
-                </div>
-                <div class="stat">
-                    <h3>🚌 Conductores</h3>
-                    <div class="number">0</div>
-                </div>
-                <div class="stat">
-                    <h3>🚗 Vehículos</h3>
-                    <div class="number">0</div>
-                </div>
-                <div class="stat">
-                    <h3>🗺️ Rutas</h3>
-                    <div class="number">0</div>
-                </div>
+                <div class="stat"><h3>👥 Usuarios</h3><div class="number">1</div></div>
+                <div class="stat"><h3>🚌 Conductores</h3><div class="number">0</div></div>
+                <div class="stat"><h3>🚗 Vehículos</h3><div class="number">0</div></div>
+                <div class="stat"><h3>🗺️ Rutas</h3><div class="number">0</div></div>
             </div>
-            
             <div class="card">
                 <h2>⚙️ Acciones Rápidas</h2>
                 <div class="menu">
@@ -154,17 +130,6 @@ def dashboard():
                     <a href="/rutas">🗺️ Rutas</a>
                 </div>
             </div>
-            
-            <div class="card">
-                <h2>🔧 Tu Sistema Original</h2>
-                <p>Para acceder a tu sistema original, ve a:</p>
-                <ul>
-                    <li><a href="/admin">/admin</a></li>
-                    <li><a href="/panel">/panel</a></li>
-                    <li><a href="/inicio">/inicio</a></li>
-                </ul>
-                <p style="color:#999;font-size:12px;">Si ninguna funciona, tu sistema original necesita ser restaurado.</p>
-            </div>
         </div>
     </body>
     </html>
@@ -173,68 +138,36 @@ def dashboard():
 @app.route('/logout')
 def logout():
     session.clear()
-    flash('Sesión cerrada correctamente')
     return redirect(url_for('index'))
 
 @app.route('/usuarios')
 def usuarios():
     if 'user' not in session:
-        flash('Por favor inicia sesión primero')
         return redirect(url_for('index'))
-    
     return '''
-    <h1>👥 Gestión de Usuarios</h1>
-    <table border="1" style="border-collapse:collapse;width:100%;">
-        <tr><th>CI</th><th>Nombre</th><th>Rol</th><th>Estado</th></tr>
-        <tr><td>00000001</td><td>Administrador</td><td>Admin</td><td>✅ Activo</td></tr>
-    </table>
-    <p><a href="/dashboard">Volver al Dashboard</a></p>
+    <h1>👥 Usuarios</h1>
+    <table border="1"><tr><th>CI</th><th>Rol</th></tr>
+    <tr><td>00000001</td><td>Administrador</td></tr></table>
+    <p><a href="/dashboard">Volver</a></p>
     '''
 
 @app.route('/conductores')
 def conductores():
     if 'user' not in session:
-        flash('Por favor inicia sesión primero')
         return redirect(url_for('index'))
-    return '<h1>🚧 Conductores - En construcción</h1><p><a href="/dashboard">Volver</a></p>'
+    return '<h1>🚧 Conductores</h1><a href="/dashboard">Volver</a>'
 
 @app.route('/vehiculos')
 def vehiculos():
     if 'user' not in session:
-        flash('Por favor inicia sesión primero')
         return redirect(url_for('index'))
-    return '<h1>🚧 Vehículos - En construcción</h1><p><a href="/dashboard">Volver</a></p>'
+    return '<h1>🚧 Vehículos</h1><a href="/dashboard">Volver</a>'
 
 @app.route('/rutas')
 def rutas():
     if 'user' not in session:
-        flash('Por favor inicia sesión primero')
         return redirect(url_for('index'))
-    return '<h1>🚧 Rutas - En construcción</h1><p><a href="/dashboard">Volver</a></p>'
-
-# ============================================
-# RUTAS PARA TU SISTEMA ORIGINAL
-# ============================================
-
-@app.route('/admin')
-def admin():
-    if 'user' not in session:
-        flash('Por favor inicia sesión primero')
-        return redirect(url_for('index'))
-    return '''
-    <h1>🚌 Panel de Administración</h1>
-    <p>Bienvenido al sistema SÍG Transporte</p>
-    <p><strong>Usuario:</strong> 00000001</p>
-    <p><strong>Rol:</strong> Administrador</p>
-    <p><a href="/dashboard">Volver al Dashboard</a></p>
-    '''
-
-@app.route('/panel')
-def panel():
-    if 'user' not in session:
-        flash('Por favor inicia sesión primero')
-        return redirect(url_for('index'))
-    return redirect(url_for('admin'))
+    return '<h1>🚧 Rutas</h1><a href="/dashboard">Volver</a>'
 
 # ============================================
 # EJECUTAR
@@ -242,4 +175,4 @@ def panel():
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
