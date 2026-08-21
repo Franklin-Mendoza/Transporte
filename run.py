@@ -1,9 +1,10 @@
 import eventlet
 eventlet.monkey_patch()
 
+# IMPORTANTE: Usar app.py (sin base de datos)
 from app import app
 
 if __name__ == "__main__":
     import os
     port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(host='0.0.0.0', port=port, debug=False)
